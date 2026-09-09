@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Twelve Janggi - Online</title>
+  <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --p1: #10b981;
+      --p2: #f43f5e;
+      --accent: #38bdf8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
+    body { background: var(--bg); color: #f8fafc; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; }
+    
+    .room-bar { display: flex; gap: 10px; margin-bottom: 20px; }
+    input, button { padding: 10px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--card-bg); color: #fff; font-size: 14px; }
+    button { background: var(--accent); color: #0f172a; font-weight: 700; cursor: pointer; border: none; }
+    button:hover { opacity: 0.9; }
+
+    .game-container { display: flex; flex-direction: column; align-items: center; gap: 14px; max-width: 420px; width: 100%; }
+    
+    .hud { width: 100%; display: flex; justify-content: space-between; align-items: center; background: var(--card-bg); padding: 12px 18px; border-radius: 12px; border: 1px solid var(--border); }
+    .timer { font-size: 20px; font-weight: 800; color: #fbbf24; }
+
+    .captives-area { display: flex; gap: 8px; min-height: 48px; background: rgba(255,255,255,0.03); width: 100%; padding: 8px; border-radius: 8px; border: 1px dashed var(--border); }
+    
+    .board { display: grid; grid-template-rows: repeat(4, 80px); grid-template-columns: repeat(3, 80px); gap: 6px; background: #090d16; padding: 8px; border-radius: 12px; border: 2px solid var(--border); }
+    
+    .cell { background: #1a2333; border-radius: 8px; display: flex; align-items: center; justify-content: center; position: relative; cursor: pointer; user-select: none; transition: background 0.15s ease; }
+    .cell.p2-territory { border-top: 3px solid var(--p2); }
+    .cell.p1-territory { border-bottom: 3px solid var(--p1); }
+    .cell.highlight { background: #2d3748; outline: 2px solid var(--accent); }
+    
+    .piece { width: 64px; height: 64px; border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+    .piece.p1 { background: #064e3b; border: 2px solid var(--p1); color: #6ee7b7; }
+    .piece.p2 { background: #881337; border: 2px solid var(--p2); color: #fda4af; }
+    .piece.selected { outline: 3px solid #fbbf24; }
+    
+    .piece-symbol { font-size: 20px; }
+  </style>
+</head>
+<body>
+
+  <div class="room-bar">
+    <input type="text" id="roomIdInput" placeholder="Enter Room ID" value="genius-room-1" />
+    <button onclick="joinRoom()">Join Game</button>
+  </div>
+
+  <div class="game-container">
+    <div class="hud">
+      <div>Turn: <span id="turnIndicator">-</span></div>
+      <div class="timer" id="timerBox">--s</div>
+      <div>Score: <span id="scoreBox">0 - 0</span></div>
+    </div>
+
+    <!-- P2 (Opponent) Captives -->
+    <div class="captives-area" id="p2Captives"></div>
+
+    <!-- 4x3 Grid -->
+    <div class="board" id="board"></div>
+
+    <!-- P1 (Player) Captives -->
+    <div class="captives-area" id="p1Captives"></div>
+  </div>
+
+  <script>
+    // UPDATE THIS with your Render server URL after deployment
+    const SERVER_URL = "http://localhost:4000"; 
+    const socket = io(SERVER_URL);
+
+    let currentRoom = null;
+    let localPlayer = 0;
+    let gameState = null;
+    let selectedSource = null;
+
+    const PIECE_CONFIG = {
+      king: { name: 'KING', symbol: '王' },
+      general: { name: 'GEN', symbol: '將' },
+      minister: { name: 'MIN', symbol: '相' },
+      man: { name: 'MAN', symbol: '兵' },
+      lord: { name: 'LORD', symbol: '侯' }
+    };
+
+    function joinRoom() {
+      const roomId = document.getElementById('roomIdInput').value.trim();
+      if (!roomId) return;
+      currentRoom = roomId;
+      socket.emit('join-room', roomId);
+    }
+
+    socket.on('player-assigned', (playerNum) => {
+      localPlayer = playerNum;
+      alert(`Joined as ${playerNum === 0 ? 'Spectator' : 'Player ' + playerNum}`);
+    });
+
+    socket.on('state-update', (state) => { gameState = state; render(); });
+    socket.on('game-start', (state) => { gameState = state; render(); });
+    socket.on('timer-update', (time) => { document.getElementById('timerBox').innerText = `${time}s`; });
+    
+    socket.on('round-over', ({ winner, reason, score }) => {
+      alert(`Round Won by Player ${winner}! Reason: ${reason}`);
+    });
+    
+    socket.on('game-over', ({ winner, reason, score }) => {
+      alert(`Match Ended! Winner: Player ${winner} (${score[1]} - ${score[2]})`);
+    });
+
+    function render() {
+      if (!gameState) return;
+      document.getElementById('turnIndicator').innerText = `P${gameState.currentTurn}`;
+      document.getElementById('scoreBox').innerText = `${gameState.score[1]} - ${gameState.score[2]}`;
+
+      // Render Board
+      const boardEl = document.getElementById('board');
+      boardEl.innerHTML = '';
+      for (let r = 0; r < 4; r++) {
+        for (let c = 0; c < 3; c++) {
+          const cell = document.createElement('div');
+          cell.className = `cell ${r === 0 ? 'p2-territory' : ''} ${r === 3 ? 'p1-territory' : ''}`;
+          
+          const piece = gameState.board[r][c];
+          if (piece) {
+            const pieceEl = document.createElement('div');
+            pieceEl.className = `piece p${piece.player} ${selectedSource?.r === r && selectedSource?.c === c ? 'selected' : ''}`;
+            pieceEl.innerHTML = `<span class="piece-symbol">${PIECE_CONFIG[piece.type].symbol}</span><span>${PIECE_CONFIG[piece.type].name}</span>`;
+            cell.appendChild(pieceEl);
+          }
+
+          cell.onclick = () => handleCellClick(r, c);
+          boardEl.appendChild(cell);
+        }
+      }
+
+      // Render Captives
+      renderCaptives(1, 'p1Captives');
+      renderCaptives(2, 'p2Captives');
+    }
+
+    function renderCaptives(player, elementId) {
+      const container = document.getElementById(elementId);
+      container.innerHTML = '';
+      gameState.captives[player].forEach((type, index) => {
+        const pEl = document.createElement('div');
+        const isSelected = selectedSource?.type === 'captive' && selectedSource?.index === index && selectedSource?.player === player;
+        pEl.className = `piece p${player} ${isSelected ? 'selected' : ''}`;
+        pEl.style.width = '44px';
+        pEl.style.height = '44px';
+        pEl.innerHTML = `<span style="font-size:14px;">${PIECE_CONFIG[type].symbol}</span>`;
+        pEl.onclick = (e) => {
+          e.stopPropagation();
+          if (localPlayer !== gameState.currentTurn || localPlayer !== player) return;
+          selectedSource = { type: 'captive', index, player };
+          render();
+        };
+        container.appendChild(pEl);
+      });
+    }
+
+    function handleCellClick(r, c) {
+      if (localPlayer !== gameState.currentTurn) return;
+
+      if (!selectedSource) {
+        const piece = gameState.board[r][c];
+        if (piece && piece.player === localPlayer) {
+          selectedSource = { type: 'board', r, c };
+          render();
+        }
+      } else {
+        // Send move to backend
+        socket.emit('make-move', {
+          roomId: currentRoom,
+          from: selectedSource,
+          to: { r, c }
+        });
+        selectedSource = null;
+        render();
+      }
+    }
+  </script>
+</body>
+</html>
