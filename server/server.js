@@ -49,6 +49,8 @@ function createInitialState() {
 
 function getLegalMoves(piece, r, c) {
   const deltas = [];
+  // P1 starts bottom (row 3) -> moves up (dr = -1)
+  // P2 starts top (row 0) -> moves down (dr = +1)
   const forward = piece.player === 1 ? -1 : 1;
 
   if (piece.type === 'king') {
@@ -64,7 +66,7 @@ function getLegalMoves(piece, r, c) {
   } else if (piece.type === 'man') {
     deltas.push([forward, 0]);
   } else if (piece.type === 'lord') {
-    // All directions except diagonally backwards
+    // Moves everywhere except diagonally backward
     deltas.push([forward, 0], [0, -1], [0, 1], [-forward, 0]);
     deltas.push([forward, -1], [forward, 1]);
   }
