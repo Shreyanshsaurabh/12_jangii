@@ -221,8 +221,12 @@
 
   <script>
     // Point this to your Render service URL once deployed
-    const SERVER_URL = "https://one2-jangii.onrender.com"; 
-    const socket = io(SERVER_URL);
+    const SERVER_URL = "https://one2-jangii.onrender.com";
+
+const socket = io(SERVER_URL, {
+  transports: ["websocket", "polling"], // Try WebSocket first
+  withCredentials: true
+});
 
     let currentRoom = null;
     let localPlayer = 0; // 1 = P1, 2 = P2, 0 = spectator
