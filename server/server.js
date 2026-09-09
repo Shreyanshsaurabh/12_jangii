@@ -4,14 +4,26 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 
 const app = express();
-app.use(cors());
+
+// 1. Enable Express CORS middleware
+app.use(cors({
+  origin: ["https://12-jangii.vercel.app", "http://localhost:3000", "http://localhost:5173"],
+  methods: ["GET", "POST"],
+  credentials: true
+}));
 
 const server = http.createServer(app);
+
+// 2. Explicitly configure Socket.IO CORS
 const io = new Server(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
+    origin: ["https://12-jangii.vercel.app", "http://localhost:3000", "http://localhost:5173"],
+    methods: ["GET", "POST"],
+    allowedHeaders: ["my-custom-header"],
+    credentials: true
+  },
+  // Allow fallback transports
+  transports: ['websocket', 'polling']
 });
 
 const TURN_TIME_LIMIT = 30; // 30s as per Season 4 rules
