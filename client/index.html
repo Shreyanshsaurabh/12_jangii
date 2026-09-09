@@ -397,58 +397,65 @@
     }
 
     function renderCaptives(player, containerId) {
-      const container = document.getElementById(containerId);
-      container.innerHTML = '';
+  const container = document.getElementById(containerId);
+  container.innerHTML = '';
 
-      gameState.captives[player].forEach((type, index) => {
-        const piece = { type, player };
-        const isSelected = selectedSource?.type === 'captive' && selectedSource?.index === index && selectedSource?.player === player;
-        const el = createPieceElement(piece, isSelected);
-        el.style.width = '48px';
-        el.style.height = '48px';
+  gameState.captives[player].forEach((type, index) => {
+    const piece = { type, player };
+    const isSelected = selectedSource?.type === 'captive' && selectedSource?.index === index && selectedSource?.player === player;
+    const el = createPieceElement(piece, isSelected);
+    el.style.width = '48px';
+    el.style.height = '48px';
+    el.style.pointerEvents = 'auto'; // allow clicking captive pieces
 
-        el.onclick = (e) => {
-          e.stopPropagation();
-          if (localPlayer !== gameState.currentTurn || localPlayer !== player) return;
-          selectedSource = { type: 'captive', index, player };
-          render();
-        };
-        container.appendChild(el);
-      });
+    el.onclick = (e) => {
+      e.stopPropagation();
+      if (localPlayer !== gameState.currentTurn || localPlayer !== player) return;
+      selectedSource = { type: 'captive', index, player };
+      render();
+    };
+    container.appendChild(el);
+  });
+}
+
+function handleCellClick(r, c) {
+  // 1. Guard turn & spectator
+  if (localPlayer !== gameState.currentTurn) return;
+
+  const clickedPiece = gameState.board[r][c];
+
+  // Case A: No piece selected yet -> select own piece
+  if (!selectedSource) {
+    if (clickedPiece && clickedPiece.player === localPlayer) {
+      selectedSource = { type: 'board', r, c };
+      render();
     }
+    return;
+  }
 
-    function handleCellClick(r, c) {
-      if (localPlayer !== gameState.currentTurn) return;
+  // Case B: Piece already selected -> check if clicking valid target
+  const validMoves = getValidMoves(selectedSource);
+  const isTargetValid = validMoves.some(([vr, vc]) => vr === r && vc === c);
 
-      if (!selectedSource) {
-        const piece = gameState.board[r][c];
-        if (piece && piece.player === localPlayer) {
-          selectedSource = { type: 'board', r, c };
-          render();
-        }
-      } else {
-        const validMoves = getValidMoves(selectedSource);
-        const isTargetValid = validMoves.some(([vr, vc]) => vr === r && vc === c);
-
-        if (isTargetValid) {
-          socket.emit('make-move', {
-            roomId: currentRoom,
-            from: selectedSource,
-            to: { r, c }
-          });
-          selectedSource = null;
-        } else {
-          // If clicking another of own piece, change selection
-          const target = gameState.board[r][c];
-          if (target && target.player === localPlayer) {
-            selectedSource = { type: 'board', r, c };
-          } else {
-            selectedSource = null;
-          }
-        }
-        render();
-      }
-    }
+  if (isTargetValid) {
+    // Send move to server
+    socket.emit('make-move', {
+      roomId: currentRoom,
+      from: selectedSource,
+      to: { r, c }
+    });
+    selectedSource = null;
+    render();
+  } else if (clickedPiece && clickedPiece.player === localPlayer) {
+    // Switch selection to another own piece
+    selectedSource = { type: 'board', r, c };
+    render();
+  } else {
+    // Clicked an invalid tile -> deselect
+    selectedSource = null;
+    render();
+  }
+}
   </script>
 </body>
 </html>
