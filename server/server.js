@@ -39,13 +39,17 @@ function createInitialState() {
   board[3][2] = { type: 'general', player: 1 };
   board[2][1] = { type: 'man', player: 1 };
 
+  // NOTE: the timer's setInterval handle must NEVER live inside this object.
+  // This whole object gets JSON-serialized and sent to clients over the
+  // socket on every update. A live Node Timeout handle cannot be safely
+  // serialized, and trying to emit it can throw. Track it on the room
+  // object instead (see `room.timerInterval` below), not in game state.
   return {
     board,
     captives: { 1: [], 2: [] },
     currentTurn: 1,
     kingInTerritoryTurn: null,
     timer: TURN_TIME_LIMIT,
-    timerInterval: null,
     winner: null,
     score: { 1: 0, 2: 0 },
     round: 1
@@ -83,15 +87,19 @@ function startTurnTimer(roomId) {
   const room = rooms[roomId];
   if (!room) return;
 
-  clearInterval(room.state.timerInterval);
+  clearInterval(room.timerInterval);
   room.state.timer = TURN_TIME_LIMIT;
 
-  room.state.timerInterval = setInterval(() => {
+  // Emit immediately so clients don't show a stale countdown for up to 1s
+  // while waiting for the first interval tick.
+  io.to(roomId).emit('timer-update', room.state.timer);
+
+  room.timerInterval = setInterval(() => {
     room.state.timer--;
     io.to(roomId).emit('timer-update', room.state.timer);
 
     if (room.state.timer <= 0) {
-      clearInterval(room.state.timerInterval);
+      clearInterval(room.timerInterval);
       const winner = room.state.currentTurn === 1 ? 2 : 1;
       resolveRound(roomId, winner, 'timeout');
     }
@@ -101,7 +109,7 @@ function startTurnTimer(roomId) {
 function resolveRound(roomId, winner, reason) {
   const room = rooms[roomId];
   if (!room) return;
-  clearInterval(room.state.timerInterval);
+  clearInterval(room.timerInterval);
   room.state.score[winner]++;
 
   if (room.state.score[winner] >= 2) {
@@ -110,6 +118,7 @@ function resolveRound(roomId, winner, reason) {
   } else {
     io.to(roomId).emit('round-over', { winner, reason, score: room.state.score });
     setTimeout(() => {
+      if (!rooms[roomId]) return; // room may have been cleaned up (disconnect) meanwhile
       room.state = { ...createInitialState(), score: room.state.score, round: room.state.round + 1 };
       io.to(roomId).emit('state-update', room.state);
       startTurnTimer(roomId);
@@ -124,7 +133,8 @@ io.on('connection', (socket) => {
     if (!rooms[roomId]) {
       rooms[roomId] = {
         players: [socket.id],
-        state: createInitialState()
+        state: createInitialState(),
+        timerInterval: null
       };
       socket.emit('player-assigned', { player: 1, roomId });
     } else if (rooms[roomId].players.length === 1) {
@@ -139,75 +149,86 @@ io.on('connection', (socket) => {
   });
 
   socket.on('make-move', ({ roomId, from, to }) => {
-    const room = rooms[roomId];
-    if (!room || room.state.winner) return;
+    try {
+      const room = rooms[roomId];
+      if (!room || room.state.winner) return;
 
-    const playerNum = room.players.indexOf(socket.id) + 1;
-    if (playerNum !== room.state.currentTurn) return;
+      const playerNum = room.players.indexOf(socket.id) + 1;
+      if (playerNum !== room.state.currentTurn) return;
 
-    const { board, captives } = room.state;
+      const { board, captives } = room.state;
 
-    if (from.type === 'board') {
-      const piece = board[from.r][from.c];
-      if (!piece || piece.player !== playerNum) return;
+      if (from.type === 'board') {
+        const piece = board[from.r][from.c];
+        if (!piece || piece.player !== playerNum) return;
 
-      const legalMoves = getLegalMoves(piece, from.r, from.c);
-      const isLegal = legalMoves.some(([r, c]) => r === to.r && c === to.c);
-      if (!isLegal) return;
+        const legalMoves = getLegalMoves(piece, from.r, from.c);
+        const isLegal = legalMoves.some(([r, c]) => r === to.r && c === to.c);
+        if (!isLegal) return;
 
-      const target = board[to.r][to.c];
-      if (target && target.player === playerNum) return;
+        const target = board[to.r][to.c];
+        if (target && target.player === playerNum) return;
 
-      if (target) {
-        if (target.type === 'king') {
-          resolveRound(roomId, playerNum, 'king-capture');
-          return;
+        if (target) {
+          if (target.type === 'king') {
+            resolveRound(roomId, playerNum, 'king-capture');
+            return;
+          }
+          captives[playerNum].push(target.type === 'lord' ? 'man' : target.type);
         }
-        captives[playerNum].push(target.type === 'lord' ? 'man' : target.type);
-      }
 
-      board[from.r][from.c] = null;
+        board[from.r][from.c] = null;
 
-      const enemyTerritory = playerNum === 1 ? 0 : 3;
-      if (piece.type === 'man' && to.r === enemyTerritory) {
-        piece.type = 'lord';
-      }
-      board[to.r][to.c] = piece;
+        const enemyTerritory = playerNum === 1 ? 0 : 3;
+        if (piece.type === 'man' && to.r === enemyTerritory) {
+          piece.type = 'lord';
+        }
+        board[to.r][to.c] = piece;
 
-      if (piece.type === 'king' && to.r === enemyTerritory) {
-        room.state.kingInTerritoryTurn = { player: playerNum, turnsSurvived: 0 };
-      }
-    }
-
-    if (from.type === 'captive') {
-      const pieceType = captives[playerNum][from.index];
-      const enemyTerritory = playerNum === 1 ? 0 : 3;
-
-      if (to.r === enemyTerritory || board[to.r][to.c] !== null) return;
-
-      captives[playerNum].splice(from.index, 1);
-      board[to.r][to.c] = { type: pieceType, player: playerNum };
-    }
-
-    if (room.state.kingInTerritoryTurn) {
-      if (room.state.kingInTerritoryTurn.player === playerNum) {
-        room.state.kingInTerritoryTurn.turnsSurvived++;
-        if (room.state.kingInTerritoryTurn.turnsSurvived >= 2) {
-          resolveRound(roomId, playerNum, 'king-survival');
-          return;
+        if (piece.type === 'king') {
+          if (to.r === enemyTerritory) {
+            room.state.kingInTerritoryTurn = { player: playerNum, turnsSurvived: 0 };
+          } else if (room.state.kingInTerritoryTurn && room.state.kingInTerritoryTurn.player === playerNum) {
+            // King retreated out of enemy territory - the survival clock resets.
+            room.state.kingInTerritoryTurn = null;
+          }
         }
       }
-    }
 
-    room.state.currentTurn = room.state.currentTurn === 1 ? 2 : 1;
-    io.to(roomId).emit('state-update', room.state);
-    startTurnTimer(roomId);
+      if (from.type === 'captive') {
+        const pieceType = captives[playerNum][from.index];
+        if (pieceType === undefined) return;
+        const enemyTerritory = playerNum === 1 ? 0 : 3;
+
+        if (to.r === enemyTerritory || board[to.r][to.c] !== null) return;
+
+        captives[playerNum].splice(from.index, 1);
+        board[to.r][to.c] = { type: pieceType, player: playerNum };
+      }
+
+      if (room.state.kingInTerritoryTurn) {
+        if (room.state.kingInTerritoryTurn.player === playerNum) {
+          room.state.kingInTerritoryTurn.turnsSurvived++;
+          if (room.state.kingInTerritoryTurn.turnsSurvived >= 2) {
+            resolveRound(roomId, playerNum, 'king-survival');
+            return;
+          }
+        }
+      }
+
+      room.state.currentTurn = room.state.currentTurn === 1 ? 2 : 1;
+      io.to(roomId).emit('state-update', room.state);
+      startTurnTimer(roomId);
+    } catch (err) {
+      // Never let a bad move crash the whole server / room.
+      console.error(`Error handling make-move for room ${roomId}:`, err);
+    }
   });
 
   socket.on('disconnect', () => {
     for (const [roomId, room] of Object.entries(rooms)) {
       if (room.players.includes(socket.id)) {
-        clearInterval(room.state.timerInterval);
+        clearInterval(room.timerInterval);
         io.to(roomId).emit('player-disconnected');
         delete rooms[roomId];
       }
