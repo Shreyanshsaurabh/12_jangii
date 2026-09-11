@@ -21,6 +21,7 @@
       --p2-bg: #881337;
       --accent: #38bdf8;
       --gold: #f59e0b;
+      --cell-size: clamp(64px, 22vw, 82px);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Outfit', sans-serif; }
@@ -47,10 +48,44 @@
       cursor: pointer; border: none; transition: all 0.2s;
     }
     .btn-primary { background: var(--accent); color: #090d16; }
-    .btn-primary:hover { opacity: 0.9; }
+    .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
     .btn-secondary { background: var(--card); color: #cbd5e1; border: 1px solid var(--border); }
     .btn-secondary:hover { background: #27354a; }
     .divider { margin: 16px 0; font-size: 12px; color: #64748b; }
+
+    /* Waiting-for-opponent overlay */
+    #waitingOverlay {
+      position: fixed; inset: 0; background: rgba(9, 13, 22, 0.92);
+      display: none; align-items: center; justify-content: center; z-index: 90; flex-direction: column; gap: 18px;
+      text-align: center; padding: 24px;
+    }
+    .spinner {
+      width: 40px; height: 40px; border-radius: 50%;
+      border: 4px solid var(--border); border-top-color: var(--accent);
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #waitingOverlay h2 { font-size: 18px; color: #fff; }
+    #waitingOverlay p { font-size: 13px; color: #94a3b8; max-width: 280px; }
+    .room-share {
+      display: flex; align-items: center; gap: 8px; background: var(--panel);
+      border: 1px solid var(--border); border-radius: 12px; padding: 10px 16px;
+    }
+    .room-share strong { color: var(--accent); letter-spacing: 1px; font-size: 16px; }
+
+    /* Message modal (replaces alert()) */
+    #messageOverlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.75);
+      display: none; align-items: center; justify-content: center; z-index: 250; padding: 20px;
+    }
+    .message-card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+      padding: 28px; width: 100%; max-width: 340px; text-align: center;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+    }
+    .message-card .emoji { font-size: 32px; margin-bottom: 10px; }
+    .message-card h3 { font-size: 20px; color: #fff; margin-bottom: 8px; }
+    .message-card p { font-size: 13px; color: #94a3b8; margin-bottom: 18px; }
 
     .top-bar {
       width: 100%; max-width: 400px; display: flex; justify-content: space-between; align-items: center;
@@ -73,25 +108,40 @@
       background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
       padding: 12px 18px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; text-align: center;
     }
-    .hud-player { font-size: 13px; font-weight: 600; }
+    .hud-player {
+      font-size: 13px; font-weight: 600; display: flex; flex-direction: column; align-items: center; gap: 4px;
+      transition: color 0.2s;
+    }
+    .hud-player .dot { width: 8px; height: 8px; border-radius: 50%; background: transparent; }
+    .hud-player.p1-side .dot { background: var(--p1); }
+    .hud-player.p2-side .dot { background: var(--p2); }
     .hud-player.active { color: var(--gold); }
-    .timer { font-size: 24px; font-weight: 800; color: var(--gold); }
+    .hud-player.active .dot { box-shadow: 0 0 8px currentColor; background: var(--gold); }
+    .timer { font-size: 24px; font-weight: 800; color: var(--gold); font-variant-numeric: tabular-nums; }
+    .timer.low { color: var(--p2); animation: pulse 1s infinite; }
+    @keyframes pulse { 50% { opacity: 0.4; } }
 
     .captives-box {
-      min-height: 54px; background: rgba(19, 27, 46, 0.6); border: 1px dashed var(--border);
+      min-height: 58px; background: rgba(19, 27, 46, 0.6); border: 1px dashed var(--border);
       border-radius: 12px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; overflow-x: auto;
     }
+    .captives-box:empty::before {
+      content: 'No captives'; font-size: 12px; color: #475569; padding: 0 4px;
+    }
+    .captives-box::-webkit-scrollbar { height: 4px; }
+    .captives-box::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
     .board-frame {
       background: var(--panel); border: 2px solid var(--border); border-radius: 16px;
       padding: 10px; display: flex; justify-content: center;
     }
     .board {
-      display: grid; grid-template-rows: repeat(4, 82px); grid-template-columns: repeat(3, 82px); gap: 6px;
+      display: grid; grid-template-rows: repeat(4, var(--cell-size)); grid-template-columns: repeat(3, var(--cell-size)); gap: 6px;
     }
     .cell {
       background: #172136; border-radius: 10px; position: relative;
       display: flex; align-items: center; justify-content: center; cursor: pointer;
+      transition: background 0.15s;
     }
     .cell:hover { background: #1f2c47; }
     .cell.p2-territory { border-top: 3px solid var(--p2); }
@@ -99,22 +149,27 @@
 
     /* Cyan move marker */
     .cell.valid-move::after {
-      content: ''; width: 16px; height: 16px; background: var(--accent);
-      border-radius: 50%; opacity: 0.9; box-shadow: 0 0 10px var(--accent);
+      content: ''; width: 18px; height: 18px; background: var(--accent);
+      border-radius: 50%; opacity: 0.9; box-shadow: 0 0 12px var(--accent);
       pointer-events: none; /* Must not intercept clicks */
+    }
+    .cell.valid-move.has-enemy::after {
+      width: calc(var(--cell-size) - 10px); height: calc(var(--cell-size) - 10px);
+      background: transparent; border: 3px solid var(--accent); box-shadow: 0 0 10px var(--accent);
     }
 
     .piece {
-      width: 70px; height: 70px; border-radius: 10px; position: relative;
+      width: calc(var(--cell-size) - 12px); height: calc(var(--cell-size) - 12px); border-radius: 10px; position: relative;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
-      box-shadow: 0 6px 10px rgba(0,0,0,0.35); user-select: none;
+      box-shadow: 0 6px 10px rgba(0,0,0,0.35); user-select: none; transition: transform 0.15s;
     }
     .board .piece { pointer-events: none; } /* Board pieces pass click to .cell */
-    .captives-box .piece { pointer-events: auto !important; cursor: pointer; }
+    .captives-box .piece { pointer-events: auto !important; cursor: pointer; flex-shrink: 0; }
+    .captives-box .piece:hover { transform: translateY(-2px); }
 
     .piece.p1 { background: var(--p1-bg); border: 2px solid var(--p1); color: #a7f3d0; }
     .piece.p2 { background: var(--p2-bg); border: 2px solid var(--p2); color: #fecdd3; }
-    .piece.selected { outline: 3px solid var(--gold); }
+    .piece.selected { outline: 3px solid var(--gold); box-shadow: 0 0 14px var(--gold); }
 
     .piece-hanja { font-family: 'Noto Serif KR', serif; font-size: 22px; font-weight: 700; line-height: 1; }
     .piece-name { font-size: 10px; font-weight: 800; letter-spacing: 0.5px; opacity: 0.9; margin-top: 2px; }
@@ -142,6 +197,10 @@
     .modal-content p, .modal-content li { font-size: 14px; color: #94a3b8; line-height: 1.5; }
     .modal-content ul { padding-left: 20px; }
     .close-btn { position: absolute; top: 16px; right: 16px; cursor: pointer; font-size: 20px; border: none; background: none; color: #94a3b8; }
+
+    @media (max-width: 380px) {
+      .lobby-card { padding: 22px; }
+    }
   </style>
 </head>
 <body>
@@ -151,13 +210,34 @@
     <div class="lobby-card">
       <h1>Twelve Janggi</h1>
       <p>십이지장기 • Tactical Genius Board Game</p>
-      
+
       <div class="input-group">
         <button class="btn btn-primary" onclick="createRoom()">+ Create New Game</button>
         <div class="divider">— OR JOIN EXISTING —</div>
         <input type="text" id="joinRoomId" placeholder="Enter Room ID" />
         <button class="btn btn-secondary" onclick="joinRoom()">Join Game</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Waiting for opponent -->
+  <div id="waitingOverlay">
+    <div class="spinner"></div>
+    <h2>Waiting for opponent…</h2>
+    <p>Share this room code with the person you want to play against.</p>
+    <div class="room-share">
+      <span>Room:</span> <strong id="waitingRoomText">-</strong>
+      <button class="icon-btn" style="width:28px;height:28px;font-size:13px;" onclick="copyRoomId()" title="Copy room code">⧉</button>
+    </div>
+  </div>
+
+  <!-- Generic message modal (round-over / game-over / disconnect) -->
+  <div id="messageOverlay">
+    <div class="message-card">
+      <div class="emoji" id="messageEmoji">🎉</div>
+      <h3 id="messageTitle">Round Over</h3>
+      <p id="messageBody">Details go here.</p>
+      <button class="btn btn-primary" style="width:100%;" onclick="closeMessage()">OK</button>
     </div>
   </div>
 
@@ -172,9 +252,9 @@
 
   <div class="game-container">
     <div class="hud">
-      <div class="hud-player" id="p2Status">Player 2</div>
+      <div class="hud-player p2-side" id="p2Status"><span class="dot"></span><span>Player 2</span></div>
       <div class="timer" id="timerBox">30s</div>
-      <div class="hud-player" id="p1Status">Player 1</div>
+      <div class="hud-player p1-side" id="p1Status"><span class="dot"></span><span>Player 1</span></div>
     </div>
 
     <!-- P2 Captives -->
@@ -248,36 +328,86 @@
     function enterGame(roomId) {
       currentRoom = roomId;
       document.getElementById('currentRoomText').innerText = roomId;
+      document.getElementById('waitingRoomText').innerText = roomId;
       document.getElementById('lobbyModal').style.display = 'none';
+      document.getElementById('waitingOverlay').style.display = 'flex';
       socket.emit('join-room', roomId);
     }
 
     function copyRoomId() {
       if (!currentRoom) return;
       navigator.clipboard.writeText(currentRoom);
-      alert("Room Code copied to clipboard!");
+      showMessage('📋', 'Copied!', 'Room code copied to clipboard.');
     }
 
     function openRules() { document.getElementById('rulesModal').style.display = 'flex'; }
     function closeRules() { document.getElementById('rulesModal').style.display = 'none'; }
 
+    function showMessage(emoji, title, body) {
+      document.getElementById('messageEmoji').innerText = emoji;
+      document.getElementById('messageTitle').innerText = title;
+      document.getElementById('messageBody').innerText = body;
+      document.getElementById('messageOverlay').style.display = 'flex';
+    }
+    function closeMessage() { document.getElementById('messageOverlay').style.display = 'none'; }
+
     socket.on('player-assigned', (data) => {
       localPlayer = data.player;
       currentRoom = data.roomId;
       document.getElementById('currentRoomText').innerText = currentRoom;
+      document.getElementById('waitingRoomText').innerText = currentRoom;
+
+      if (data.player === 0) {
+        // Room already has two players - joining as a spectator.
+        document.getElementById('waitingOverlay').style.display = 'none';
+        showMessage('👀', 'Spectating', 'This room already has two players. You can watch, but not play.');
+      }
     });
 
-    socket.on('state-update', (state) => { gameState = state; render(); });
-    socket.on('game-start', (state) => { gameState = state; render(); });
-    socket.on('timer-update', (t) => { document.getElementById('timerBox').innerText = `${t}s`; });
+    socket.on('state-update', (state) => {
+      gameState = state;
+      document.getElementById('waitingOverlay').style.display = 'none';
+      syncTimerDisplay();
+      render();
+    });
+    socket.on('game-start', (state) => {
+      gameState = state;
+      document.getElementById('waitingOverlay').style.display = 'none';
+      syncTimerDisplay();
+      render();
+    });
+    socket.on('timer-update', (t) => {
+      if (gameState) gameState.timer = t;
+      updateTimerBox(t);
+    });
 
     socket.on('round-over', ({ winner, reason }) => {
-      alert(`Round Won by Player ${winner}! Reason: ${reason}`);
+      const you = winner === localPlayer ? 'You win the round!' : `Player ${winner} wins the round.`;
+      showMessage(winner === localPlayer ? '🎉' : '🛡️', you, `Reason: ${formatReason(reason)}. Next round starting shortly…`);
     });
 
     socket.on('game-over', ({ winner, reason, score }) => {
-      alert(`Match Ended! Winner: Player ${winner} (${score[1]} - ${score[2]})`);
+      const you = winner === localPlayer ? 'You won the match!' : `Player ${winner} wins the match.`;
+      showMessage(winner === localPlayer ? '🏆' : '🏳️', you, `Final score: ${score[1]} - ${score[2]} (${formatReason(reason)})`);
     });
+
+    socket.on('player-disconnected', () => {
+      showMessage('🔌', 'Opponent disconnected', 'The other player left the game. Start a new game to keep playing.');
+    });
+
+    function formatReason(reason) {
+      return { 'king-capture': 'King captured', 'king-survival': 'King survived in enemy territory', 'timeout': 'Opponent ran out of time' }[reason] || reason;
+    }
+
+    function updateTimerBox(t) {
+      const box = document.getElementById('timerBox');
+      box.innerText = `${t}s`;
+      box.classList.toggle('low', t <= 10);
+    }
+
+    function syncTimerDisplay() {
+      if (gameState && typeof gameState.timer === 'number') updateTimerBox(gameState.timer);
+    }
 
     function getValidMoves(from) {
       if (!gameState) return [];
@@ -372,10 +502,12 @@
     function render() {
       if (!gameState) return;
 
-      document.getElementById('p1Status').innerText = `P1 (${gameState.score[1]}) ${gameState.currentTurn === 1 ? '●' : ''}`;
-      document.getElementById('p2Status').innerText = `P2 (${gameState.score[2]}) ${gameState.currentTurn === 2 ? '●' : ''}`;
-      document.getElementById('p1Status').className = `hud-player ${gameState.currentTurn === 1 ? 'active' : ''}`;
-      document.getElementById('p2Status').className = `hud-player ${gameState.currentTurn === 2 ? 'active' : ''}`;
+      const p1El = document.getElementById('p1Status');
+      const p2El = document.getElementById('p2Status');
+      p1El.querySelector('span:last-child').innerText = `P1 (${gameState.score[1]})${localPlayer === 1 ? ' · You' : ''}`;
+      p2El.querySelector('span:last-child').innerText = `P2 (${gameState.score[2]})${localPlayer === 2 ? ' · You' : ''}`;
+      p1El.className = `hud-player p1-side ${gameState.currentTurn === 1 ? 'active' : ''}`;
+      p2El.className = `hud-player p2-side ${gameState.currentTurn === 2 ? 'active' : ''}`;
 
       const validMoves = selectedSource ? getValidMoves(selectedSource) : [];
 
@@ -387,9 +519,12 @@
           cell.className = `cell ${r === 0 ? 'p2-territory' : ''} ${r === 3 ? 'p1-territory' : ''}`;
 
           const isValid = validMoves.some(([vr, vc]) => vr === r && vc === c);
-          if (isValid) cell.classList.add('valid-move');
-
           const piece = gameState.board[r][c];
+          if (isValid) {
+            cell.classList.add('valid-move');
+            if (piece) cell.classList.add('has-enemy');
+          }
+
           if (piece) {
             const isSelected = selectedSource?.type === 'board' && selectedSource?.r === r && selectedSource?.c === c;
             cell.appendChild(createPieceElement(piece, isSelected));
