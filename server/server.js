@@ -4,43 +4,36 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 
 const app = express();
+app.use(cors());
 
-// 1. Enable Express CORS middleware
-app.use(cors({
-  origin: ["https://12-jangii.vercel.app", "http://localhost:3000", "http://localhost:5173"],
-  methods: ["GET", "POST"],
-  credentials: true
-}));
+// Health check endpoint for Render monitoring
+app.get('/', (req, res) => {
+  res.status(200).send('12 Janggi Server is Running');
+});
 
 const server = http.createServer(app);
 
-// 2. Explicitly configure Socket.IO CORS
 const io = new Server(server, {
   cors: {
-    origin: ["https://12-jangii.vercel.app", "http://localhost:3000", "http://localhost:5173"],
-    methods: ["GET", "POST"],
-    allowedHeaders: ["my-custom-header"],
-    credentials: true
+    origin: "*", // Allows Vercel production, preview URLs, and localhost
+    methods: ["GET", "POST"]
   },
-  // Allow fallback transports
-  transports: ['websocket', 'polling']
+  transports: ['polling', 'websocket']
 });
 
-const TURN_TIME_LIMIT = 30; // 30s as per Season 4 rules
+const TURN_TIME_LIMIT = 30;
 const rooms = {};
 
-// Initial Board Setup: 4 rows x 3 cols
-// P1 is Green (bottom, row 3 territory), P2 is Red (top, row 0 territory)
 function createInitialState() {
   const board = Array(4).fill(null).map(() => Array(3).fill(null));
 
-  // P2 (Top - red): row 0 territory, forward is +row
+  // P2 (Top - red): row 0 territory, forward is +row (down)
   board[0][0] = { type: 'minister', player: 2 };
   board[0][1] = { type: 'king', player: 2 };
   board[0][2] = { type: 'general', player: 2 };
   board[1][1] = { type: 'man', player: 2 };
 
-  // P1 (Bottom - green): row 3 territory, forward is -row
+  // P1 (Bottom - green): row 3 territory, forward is -row (up)
   board[3][0] = { type: 'minister', player: 1 };
   board[3][1] = { type: 'king', player: 1 };
   board[3][2] = { type: 'general', player: 1 };
@@ -50,7 +43,7 @@ function createInitialState() {
     board,
     captives: { 1: [], 2: [] },
     currentTurn: 1,
-    kingInTerritoryTurn: null, // Tracks if king survived in enemy territory
+    kingInTerritoryTurn: null,
     timer: TURN_TIME_LIMIT,
     timerInterval: null,
     winner: null,
@@ -61,8 +54,6 @@ function createInitialState() {
 
 function getLegalMoves(piece, r, c) {
   const deltas = [];
-  // P1 starts bottom (row 3) -> moves up (dr = -1)
-  // P2 starts top (row 0) -> moves down (dr = +1)
   const forward = piece.player === 1 ? -1 : 1;
 
   if (piece.type === 'king') {
@@ -78,7 +69,7 @@ function getLegalMoves(piece, r, c) {
   } else if (piece.type === 'man') {
     deltas.push([forward, 0]);
   } else if (piece.type === 'lord') {
-    // Moves everywhere except diagonally backward
+    // Forward, Left, Right, Backward, Forward-Left, Forward-Right
     deltas.push([forward, 0], [0, -1], [0, 1], [-forward, 0]);
     deltas.push([forward, -1], [forward, 1]);
   }
@@ -101,7 +92,6 @@ function startTurnTimer(roomId) {
 
     if (room.state.timer <= 0) {
       clearInterval(room.state.timerInterval);
-      // Timeout forfeiture: current turn loses
       const winner = room.state.currentTurn === 1 ? 2 : 1;
       resolveRound(roomId, winner, 'timeout');
     }
@@ -110,6 +100,7 @@ function startTurnTimer(roomId) {
 
 function resolveRound(roomId, winner, reason) {
   const room = rooms[roomId];
+  if (!room) return;
   clearInterval(room.state.timerInterval);
   room.state.score[winner]++;
 
@@ -135,16 +126,15 @@ io.on('connection', (socket) => {
         players: [socket.id],
         state: createInitialState()
       };
-      socket.emit('player-assigned', 1);
+      socket.emit('player-assigned', { player: 1, roomId });
     } else if (rooms[roomId].players.length === 1) {
       rooms[roomId].players.push(socket.id);
-      socket.emit('player-assigned', 2);
+      socket.emit('player-assigned', { player: 2, roomId });
       io.to(roomId).emit('game-start', rooms[roomId].state);
       startTurnTimer(roomId);
     } else {
-      socket.emit('player-assigned', 0); // Spectator
+      socket.emit('player-assigned', { player: 0, roomId });
       socket.emit('state-update', rooms[roomId].state);
-      return;
     }
   });
 
@@ -157,7 +147,6 @@ io.on('connection', (socket) => {
 
     const { board, captives } = room.state;
 
-    // Normal movement on board
     if (from.type === 'board') {
       const piece = board[from.r][from.c];
       if (!piece || piece.player !== playerNum) return;
@@ -167,46 +156,39 @@ io.on('connection', (socket) => {
       if (!isLegal) return;
 
       const target = board[to.r][to.c];
-      if (target && target.player === playerNum) return; // Cannot capture own piece
+      if (target && target.player === playerNum) return;
 
-      // Capture logic
       if (target) {
         if (target.type === 'king') {
           resolveRound(roomId, playerNum, 'king-capture');
           return;
         }
-        // Demote Lord to Man when captured
         captives[playerNum].push(target.type === 'lord' ? 'man' : target.type);
       }
 
       board[from.r][from.c] = null;
 
-      // Promotion logic: Man entering opponent territory
       const enemyTerritory = playerNum === 1 ? 0 : 3;
       if (piece.type === 'man' && to.r === enemyTerritory) {
         piece.type = 'lord';
       }
       board[to.r][to.c] = piece;
 
-      // Check king survival victory condition
       if (piece.type === 'king' && to.r === enemyTerritory) {
         room.state.kingInTerritoryTurn = { player: playerNum, turnsSurvived: 0 };
       }
     }
 
-    // Drop captive
     if (from.type === 'captive') {
       const pieceType = captives[playerNum][from.index];
       const enemyTerritory = playerNum === 1 ? 0 : 3;
 
-      // Rule: Drop anywhere empty outside opponent's territory
       if (to.r === enemyTerritory || board[to.r][to.c] !== null) return;
 
       captives[playerNum].splice(from.index, 1);
       board[to.r][to.c] = { type: pieceType, player: playerNum };
     }
 
-    // Process King Survival check
     if (room.state.kingInTerritoryTurn) {
       if (room.state.kingInTerritoryTurn.player === playerNum) {
         room.state.kingInTerritoryTurn.turnsSurvived++;
@@ -217,7 +199,6 @@ io.on('connection', (socket) => {
       }
     }
 
-    // Switch turn
     room.state.currentTurn = room.state.currentTurn === 1 ? 2 : 1;
     io.to(roomId).emit('state-update', room.state);
     startTurnTimer(roomId);
@@ -234,8 +215,7 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 10000; // Render sets PORT automatically
-
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${PORT}`);
 });
